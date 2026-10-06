@@ -19,22 +19,29 @@ jobs:
           unzip -q openstrap-edge-whoop-custom.zip
           cd edge-main
           echo "Project extracted"
-          ls
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.6'
 
-      - name: Build IPA
+      - name: Install dependencies
         working-directory: edge-main
         run: |
           echo "COMPANION_URL=" > .env
           echo "BACKEND_URL=" >> .env
           echo "ENABLE_HEALTH_DATA_CONTRIBUTION=true" >> .env
-
           flutter pub get
 
+      - name: Disable iOS code signing
+        working-directory: edge-main
+        run: |
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g' ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES/CODE_SIGNING_REQUIRED = NO/g' ios/Runner.xcodeproj/project.pbxproj
+
+      - name: Build iOS
+        working-directory: edge-main
+        run: |
           flutter build ios \
             --release \
             --no-codesign \
@@ -44,8 +51,7 @@ jobs:
         working-directory: edge-main
         run: |
           rm -rf Payload
-          mkdir -p Payload
-
+          mkdir Payload
           cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
 
           zip -qr -y \
