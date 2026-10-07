@@ -11,7 +11,6 @@ jobs:
     runs-on: macos-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -19,6 +18,7 @@ jobs:
         run: |
           unzip -q openstrap-edge-whoop-custom.zip
           echo "Project extracted"
+          ls -la
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -68,11 +68,6 @@ jobs:
           )
 
           s = s.replace(
-              'DEVELOPMENT_TEAM = "";',
-              'DEVELOPMENT_TEAM = "";'
-          )
-
-          s = s.replace(
               'CODE_SIGN_IDENTITY = "Apple Development";',
               'CODE_SIGN_IDENTITY = "";'
           )
@@ -90,7 +85,7 @@ jobs:
           print("Signing configuration modified.")
           PY
 
-         - name: Prepare Flutter iOS
+      - name: Prepare Flutter iOS
         working-directory: edge-main
         run: |
           flutter build ios \
@@ -114,6 +109,7 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             build
+
       - name: Verify app
         working-directory: edge-main
         run: |
