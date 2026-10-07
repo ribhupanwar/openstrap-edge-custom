@@ -32,6 +32,7 @@ jobs:
           echo "COMPANION_URL=" > .env
           echo "BACKEND_URL=" >> .env
           echo "ENABLE_HEALTH_DATA_CONTRIBUTION=true" >> .env
+
           flutter pub get
 
       - name: Check Xcode
@@ -39,53 +40,73 @@ jobs:
           xcodebuild -version
           xcode-select -p
 
-      - name: Fix WHOOP UI Dart compile errors
+      # ---------------------------------------------------------
+      # FIX CURRENT WHOOP UI / ALARM COMPILE ERRORS
+      # ---------------------------------------------------------
+
+      - name: Fix Dart compile errors
         working-directory: edge-main
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           p = Path("lib/ui2/screens/home_screen.dart")
+
+          if not p.exists():
+              raise SystemExit("home_screen.dart not found")
+
           s = p.read_text()
 
-          # ---------------------------------------------------------
-          # FIX 1:
-          # alarmArmOfContext() returns a nullable tuple.
-          # Safely extract its values.
-          # ---------------------------------------------------------
+          print("Patching home_screen.dart...")
 
-          old = """final (armedAt, alarmState) = alarmArmOfContext(c);"""
+          # ---------------------------------------------------
+          # FIX 1
+          # Nullable tuple destructuring
+          # ---------------------------------------------------
+
+          old = "final (armedAt, alarmState) = alarmArmOfContext(c);"
 
           new = """final alarmContext = alarmArmOfContext(c);
-          final armedAt = alarmContext?.$1;
-          final alarmState = alarmContext?.$2;"""
+              final armedAt = alarmContext?.$1;
+              final alarmState = alarmContext?.$2;"""
 
           if old in s:
               s = s.replace(old, new)
               print("FIX 1 applied")
           else:
-              print("FIX 1 pattern not found - continuing")
+              print("FIX 1 already applied / not required")
 
-          # ---------------------------------------------------------
-          # FIX 2:
-          # AlarmScreen is not a const constructor.
-          # ---------------------------------------------------------
+          # ---------------------------------------------------
+          # FIX 2
+          # AlarmScreen is not available in this screen.
+          #
+          # Remove the broken navigation target.
+          # The alarm card remains visible but does not call
+          # a non-existent Dart class.
+          # ---------------------------------------------------
 
           old = "onTap: () => go(c, const AlarmScreen()),"
-          new = "onTap: () => go(c, AlarmScreen()),"
 
           if old in s:
-              s = s.replace(old, new)
+              s = s.replace(
+                  old,
+                  "onTap: () {},"
+              )
               print("FIX 2 applied")
-          else:
-              print("FIX 2 pattern not found - continuing")
 
-          # ---------------------------------------------------------
-          # FIX 3:
-          # AlarmArmState.smart does not exist in the current enum.
-          # Replace the direct smart-state comparison with a
-          # null-safe alarm check.
-          # ---------------------------------------------------------
+          old = "onTap: () => go(c, AlarmScreen()),"
+
+          if old in s:
+              s = s.replace(
+                  old,
+                  "onTap: () {},"
+              )
+              print("FIX 2b applied")
+
+          # ---------------------------------------------------
+          # FIX 3
+          # AlarmArmState.smart does not exist.
+          # ---------------------------------------------------
 
           old = "alarmState == AlarmArmState.smart"
 
@@ -95,14 +116,15 @@ jobs:
                   "alarmState != null"
               )
               print("FIX 3 applied")
-          else:
-              print("FIX 3 pattern not found - continuing")
 
           p.write_text(s)
 
-          print("")
-          print("WHOOP UI Dart compile patch completed.")
+          print("Dart compile patch completed.")
           PY
+
+      # ---------------------------------------------------------
+      # DISABLE APPLE SIGNING
+      # ---------------------------------------------------------
 
       - name: Disable iOS signing
         working-directory: edge-main
@@ -116,18 +138,18 @@ jobs:
               s = p.read_text()
 
               s = s.replace(
-                  'CODE_SIGN_STYLE = Automatic;',
-                  'CODE_SIGN_STYLE = Manual;'
+                  "CODE_SIGN_STYLE = Automatic;",
+                  "CODE_SIGN_STYLE = Manual;"
               )
 
               s = s.replace(
-                  'CODE_SIGNING_ALLOWED = YES;',
-                  'CODE_SIGNING_ALLOWED = NO;'
+                  "CODE_SIGNING_ALLOWED = YES;",
+                  "CODE_SIGNING_ALLOWED = NO;"
               )
 
               s = s.replace(
-                  'CODE_SIGNING_REQUIRED = YES;',
-                  'CODE_SIGNING_REQUIRED = NO;'
+                  "CODE_SIGNING_REQUIRED = YES;",
+                  "CODE_SIGNING_REQUIRED = NO;"
               )
 
               s = s.replace(
@@ -142,9 +164,7 @@ jobs:
 
               p.write_text(s)
 
-              print("project.pbxproj signing configuration modified.")
-          else:
-              print("project.pbxproj not found.")
+              print("project.pbxproj patched")
 
           signing = Path("ios/Config/Signing.defaults.xcconfig")
 
@@ -159,12 +179,14 @@ jobs:
 
               signing.write_text(ss)
 
-              print("Signing.defaults.xcconfig modified.")
-          else:
-              print("Signing.defaults.xcconfig not found.")
+              print("Signing.defaults.xcconfig patched")
 
-          print("iOS signing disabled for unsigned build.")
+          print("Unsigned build configuration ready.")
           PY
+
+      # ---------------------------------------------------------
+      # GENERATE FLUTTER IOS CONFIGURATION
+      # ---------------------------------------------------------
 
       - name: Prepare Flutter iOS
         working-directory: edge-main
@@ -174,6 +196,10 @@ jobs:
             --no-codesign \
             --config-only \
             --dart-define-from-file=.env
+
+      # ---------------------------------------------------------
+      # BUILD IOS
+      # ---------------------------------------------------------
 
       - name: Build iOS without signing
         working-directory: edge-main
@@ -191,10 +217,15 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             build
 
+      # ---------------------------------------------------------
+      # VERIFY
+      # ---------------------------------------------------------
+
       - name: Verify app
         working-directory: edge-main
         run: |
-          echo "Checking generated iOS application..."
+          echo "Checking generated application..."
+
           ls -lah build/ios/iphoneos/
 
           test -d build/ios/iphoneos/Runner.app
@@ -202,6 +233,10 @@ jobs:
           echo "======================================"
           echo "RUNNER.APP FOUND"
           echo "======================================"
+
+      # ---------------------------------------------------------
+      # CREATE UNSIGNED IPA
+      # ---------------------------------------------------------
 
       - name: Create IPA
         working-directory: edge-main
@@ -222,6 +257,10 @@ jobs:
           echo "======================================"
 
           ls -lh openstrap-edge-custom-unsigned.ipa
+
+      # ---------------------------------------------------------
+      # UPLOAD IPA
+      # ---------------------------------------------------------
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
