@@ -1,4 +1,4 @@
-name: Build OpenStrap Edge Custom IPA
+name: Build OpenStrap Edge Custom IPA WITH WATCH
 
 on:
   workflow_dispatch:
@@ -12,30 +12,45 @@ jobs:
 
     steps:
 
-      # =========================================================
-      # CHECKOUT
-      # =========================================================
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
 
       - name: Checkout
         uses: actions/checkout@v4
 
-      # =========================================================
-      # EXTRACT PROJECT
-      # =========================================================
+
+      # ============================================================
+      # 2. EXTRACT CUSTOM PROJECT
+      # ============================================================
 
       - name: Extract project
         run: |
-          echo "Extracting OpenStrap Edge project..."
+          echo "=========================================="
+          echo "EXTRACTING OPENSTRAP EDGE PROJECT"
+          echo "=========================================="
 
           unzip -q openstrap-edge-whoop-custom.zip
 
-          echo "Project extracted."
+          echo ""
+          echo "Root:"
           ls -la
+
+          echo ""
+          echo "Project:"
           ls -la edge-main
 
-      # =========================================================
-      # FLUTTER
-      # =========================================================
+          echo ""
+          echo "Watch source:"
+          find "edge-main/ios/OpenStrapWatch Watch App" \
+            -maxdepth 2 \
+            -type f \
+            -print || true
+
+
+      # ============================================================
+      # 3. FLUTTER
+      # ============================================================
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -43,13 +58,18 @@ jobs:
           flutter-version: '3.41.6'
           channel: stable
 
-      # =========================================================
-      # DEPENDENCIES
-      # =========================================================
+
+      # ============================================================
+      # 4. DEPENDENCIES
+      # ============================================================
 
       - name: Install dependencies
         working-directory: edge-main
         run: |
+          echo "=========================================="
+          echo "INSTALLING FLUTTER DEPENDENCIES"
+          echo "=========================================="
+
           echo "COMPANION_URL=" > .env
           echo "BACKEND_URL=" >> .env
           echo "ENABLE_HEALTH_DATA_CONTRIBUTION=true" >> .env
@@ -57,18 +77,24 @@ jobs:
           flutter --version
           flutter pub get
 
-      # =========================================================
-      # XCODE CHECK
-      # =========================================================
+
+      # ============================================================
+      # 5. XCODE CHECK
+      # ============================================================
 
       - name: Check Xcode
         run: |
+          echo "=========================================="
+          echo "XCODE"
+          echo "=========================================="
+
           xcodebuild -version
           xcode-select -p
 
-      # =========================================================
-      # FIX DART COMPILE ERRORS
-      # =========================================================
+
+      # ============================================================
+      # 6. FIX DART COMPILATION
+      # ============================================================
 
       - name: Fix Dart compile errors
         working-directory: edge-main
@@ -85,10 +111,9 @@ jobs:
 
           print("Patching home_screen.dart...")
 
-          # -----------------------------------------------------
-          # FIX 1
-          # Nullable tuple destructuring
-          # -----------------------------------------------------
+          # --------------------------------------------------------
+          # FIX nullable tuple
+          # --------------------------------------------------------
 
           old = "final (armedAt, alarmState) = alarmArmOfContext(c);"
 
@@ -102,41 +127,30 @@ jobs:
           else:
               print("FIX 1 already applied / not found")
 
-          # -----------------------------------------------------
-          # FIX 2
-          # AlarmScreen does not exist in current source.
-          # -----------------------------------------------------
+          # --------------------------------------------------------
+          # FIX missing AlarmScreen
+          # --------------------------------------------------------
 
           old = "onTap: () => go(c, const AlarmScreen()),"
 
           if old in s:
-              s = s.replace(
-                  old,
-                  "onTap: () {},"
-              )
+              s = s.replace(old, "onTap: () {},")
               print("FIX 2 applied")
 
           old = "onTap: () => go(c, AlarmScreen()),"
 
           if old in s:
-              s = s.replace(
-                  old,
-                  "onTap: () {},"
-              )
+              s = s.replace(old, "onTap: () {},")
               print("FIX 2b applied")
 
-          # -----------------------------------------------------
-          # FIX 3
-          # AlarmArmState.smart does not exist
-          # -----------------------------------------------------
+          # --------------------------------------------------------
+          # FIX missing AlarmArmState.smart
+          # --------------------------------------------------------
 
           old = "alarmState == AlarmArmState.smart"
 
           if old in s:
-              s = s.replace(
-                  old,
-                  "alarmState != null"
-              )
+              s = s.replace(old, "alarmState != null")
               print("FIX 3 applied")
           else:
               print("FIX 3 already applied / not found")
@@ -146,11 +160,18 @@ jobs:
           print("Dart patch completed.")
           PY
 
-      # =========================================================
-      # DISABLE IOS SIGNING
-      # =========================================================
 
-      - name: Disable iOS signing
+      # ============================================================
+      # 7. PREPARE WATCH SIGNING
+      #
+      # IMPORTANT:
+      # WATCH IS NOT REMOVED.
+      #
+      # We only disable Apple's development signing in CI.
+      # Sideloadly will perform the actual device signing later.
+      # ============================================================
+
+      - name: Prepare iOS and Watch signing
         working-directory: edge-main
         run: |
           python3 - <<'PY'
@@ -158,38 +179,70 @@ jobs:
 
           p = Path("ios/Runner.xcodeproj/project.pbxproj")
 
-          if p.exists():
+          if not p.exists():
+              raise SystemExit("ERROR: project.pbxproj not found")
 
-              s = p.read_text()
+          s = p.read_text()
 
+          print("Patching iOS signing...")
+
+          # --------------------------------------------------------
+          # MAIN PROJECT / IOS TARGET
+          # --------------------------------------------------------
+
+          s = s.replace(
+              "CODE_SIGN_STYLE = Automatic;",
+              "CODE_SIGN_STYLE = Manual;"
+          )
+
+          s = s.replace(
+              "CODE_SIGNING_ALLOWED = YES;",
+              "CODE_SIGNING_ALLOWED = NO;"
+          )
+
+          s = s.replace(
+              "CODE_SIGNING_REQUIRED = YES;",
+              "CODE_SIGNING_REQUIRED = NO;"
+          )
+
+          s = s.replace(
+              'DEVELOPMENT_TEAM = "$(APPLE_DEVELOPMENT_TEAM)";',
+              'DEVELOPMENT_TEAM = "";'
+          )
+
+          s = s.replace(
+              'CODE_SIGN_IDENTITY = "Apple Development";',
+              'CODE_SIGN_IDENTITY = "";'
+          )
+
+          # --------------------------------------------------------
+          # WATCH TARGET
+          #
+          # Watch app doesn't actually use App Groups in its Swift
+          # code. Removing its CI entitlement prevents a provisioning
+          # profile/App Group requirement from interfering with the
+          # later Sideloadly signing.
+          # --------------------------------------------------------
+
+          watch_entitlement = (
+              'CODE_SIGN_ENTITLEMENTS = '
+              '"OpenStrapWatch Watch App/OpenStrapWatch Watch App.entitlements";'
+          )
+
+          if watch_entitlement in s:
               s = s.replace(
-                  "CODE_SIGN_STYLE = Automatic;",
-                  "CODE_SIGN_STYLE = Manual;"
+                  watch_entitlement,
+                  'CODE_SIGN_ENTITLEMENTS = "";'
               )
+              print("Watch App Group entitlement disabled for CI build.")
+          else:
+              print("Watch entitlement line not found.")
 
-              s = s.replace(
-                  "CODE_SIGNING_ALLOWED = YES;",
-                  "CODE_SIGNING_ALLOWED = NO;"
-              )
+          p.write_text(s)
 
-              s = s.replace(
-                  "CODE_SIGNING_REQUIRED = YES;",
-                  "CODE_SIGNING_REQUIRED = NO;"
-              )
-
-              s = s.replace(
-                  'DEVELOPMENT_TEAM = "$(APPLE_DEVELOPMENT_TEAM)";',
-                  'DEVELOPMENT_TEAM = "";'
-              )
-
-              s = s.replace(
-                  'CODE_SIGN_IDENTITY = "Apple Development";',
-                  'CODE_SIGN_IDENTITY = "";'
-              )
-
-              p.write_text(s)
-
-              print("project.pbxproj patched.")
+          # --------------------------------------------------------
+          # Signing.defaults.xcconfig
+          # --------------------------------------------------------
 
           signing = Path("ios/Config/Signing.defaults.xcconfig")
 
@@ -207,30 +260,87 @@ jobs:
 
               print("Signing.defaults.xcconfig patched.")
 
-          print("Unsigned iOS build configuration ready.")
+          print("")
+          print("==========================================")
+          print("WATCH TARGET WILL BE BUILT")
+          print("WATCH TARGET WILL NOT BE REMOVED")
+          print("==========================================")
           PY
 
-      # =========================================================
-      # PREPARE FLUTTER IOS
-      # =========================================================
+
+      # ============================================================
+      # 8. VERIFY WATCH CONFIGURATION BEFORE BUILD
+      # ============================================================
+
+      - name: Verify Watch configuration
+        working-directory: edge-main
+        run: |
+          echo "=========================================="
+          echo "WATCH CONFIGURATION"
+          echo "=========================================="
+
+          echo ""
+          echo "Watch target:"
+          grep -n \
+            'OpenStrapWatch Watch App' \
+            ios/Runner.xcodeproj/project.pbxproj \
+            | head -30 || true
+
+          echo ""
+          echo "Watch bundle ID:"
+          grep -n \
+            'PRODUCT_BUNDLE_IDENTIFIER = "$(APP_BUNDLE_IDENTIFIER).watchkitapp"' \
+            ios/Runner.xcodeproj/project.pbxproj \
+            || true
+
+          echo ""
+          echo "Watch companion ID:"
+          grep -n \
+            'INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(APP_BUNDLE_IDENTIFIER)"' \
+            ios/Runner.xcodeproj/project.pbxproj \
+            || true
+
+          echo ""
+          echo "Watch embedding:"
+          grep -n \
+            'Embed Watch Content' \
+            ios/Runner.xcodeproj/project.pbxproj \
+            || true
+
+          echo ""
+          echo "Expected relationship:"
+          echo "iPhone  = com.example.openstrapEdge"
+          echo "Watch   = com.example.openstrapEdge.watchkitapp"
+
+
+      # ============================================================
+      # 9. PREPARE FLUTTER IOS
+      # ============================================================
 
       - name: Prepare Flutter iOS
         working-directory: edge-main
         run: |
+          echo "=========================================="
+          echo "FLUTTER IOS PREPARATION"
+          echo "=========================================="
+
           flutter build ios \
             --release \
             --no-codesign \
             --config-only \
             --dart-define-from-file=.env
 
-      # =========================================================
-      # BUILD IOS
-      # =========================================================
 
-      - name: Build iOS without signing
+      # ============================================================
+      # 10. BUILD IOS + WATCH
+      # ============================================================
+
+      - name: Build iOS and Watch without Apple signing
         working-directory: edge-main
         run: |
-          echo "Starting Xcode build..."
+          echo "=========================================="
+          echo "BUILDING IOS + WATCH"
+          echo "=========================================="
 
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
@@ -245,16 +355,22 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             build
 
-          echo "Xcode build completed."
+          echo ""
+          echo "=========================================="
+          echo "XCODE BUILD COMPLETED"
+          echo "=========================================="
 
-      # =========================================================
-      # FIND RUNNER.APP
-      # =========================================================
+
+      # ============================================================
+      # 11. FIND RUNNER.APP
+      # ============================================================
 
       - name: Find generated iOS app
         working-directory: edge-main
         run: |
-          echo "Searching for Runner.app..."
+          echo "=========================================="
+          echo "SEARCHING FOR RUNNER.APP"
+          echo "=========================================="
 
           find build \
             -type d \
@@ -268,106 +384,266 @@ jobs:
             -quit 2>/dev/null || true)
 
           if [ -z "$APP_PATH" ]; then
-
+            echo ""
             echo "ERROR: Runner.app was not generated."
-
-            echo "Build directory:"
-            find build \
-              -maxdepth 6 \
-              -type d \
-              -print 2>/dev/null | head -300 || true
-
             exit 1
           fi
 
-          echo "=========================================="
-          echo "RUNNER.APP FOUND"
-          echo "=========================================="
-
+          echo ""
+          echo "RUNNER.APP:"
           echo "$APP_PATH"
 
           echo "$APP_PATH" > runner_app_path.txt
 
+          echo ""
+          echo "SIZE:"
           du -sh "$APP_PATH"
 
-      # =========================================================
-      # REMOVE WATCH COMPANION FROM GENERATED IPA
-      # =========================================================
 
-      - name: Remove Watch companion
+      # ============================================================
+      # 12. VERIFY WATCH WAS ACTUALLY EMBEDDED
+      # ============================================================
+
+      - name: Verify embedded Watch app
         working-directory: edge-main
         run: |
           APP_PATH=$(cat runner_app_path.txt)
 
+          WATCH_APP="$APP_PATH/Watch/OpenStrapWatch Watch App.app"
+
           echo "=========================================="
-          echo "CHECKING WATCH COMPANION"
+          echo "VERIFYING WATCH APP"
           echo "=========================================="
 
-          echo "Application:"
+          echo ""
+          echo "Runner:"
           echo "$APP_PATH"
 
-          if [ -d "$APP_PATH/Watch" ]; then
+          echo ""
+          echo "Expected Watch:"
+          echo "$WATCH_APP"
 
+          if [ ! -d "$WATCH_APP" ]; then
             echo ""
-            echo "Watch directory found:"
-            find "$APP_PATH/Watch" \
-              -maxdepth 3 \
-              -print || true
-
+            echo "ERROR: Watch app was NOT embedded."
             echo ""
-            echo "Removing embedded Watch application..."
-
-            rm -rf "$APP_PATH/Watch"
-
-            echo ""
-            echo "Watch companion removed."
-
-          else
-
-            echo ""
-            echo "No Watch directory found."
-
-          fi
-
-          # -----------------------------------------------------
-          # Also check for WatchKit/Watch extension locations
-          # -----------------------------------------------------
-
-          if [ -d "$APP_PATH/PlugIns" ]; then
-
-            echo ""
-            echo "Checking PlugIns..."
-
-            find "$APP_PATH/PlugIns" \
-              -maxdepth 3 \
-              -print || true
-
-            # Remove WatchKit extensions if present
-            find "$APP_PATH/PlugIns" \
-              -type d \
-              \( -name "*.appex" -o -name "*Watch*" \) \
-              -print 2>/dev/null || true
-
+            echo "Runner contents:"
+            find "$APP_PATH" \
+              -maxdepth 4 \
+              -print | head -250
+            exit 1
           fi
 
           echo ""
-          echo "Final embedded bundles:"
+          echo "SUCCESS: Watch app exists."
 
-          find "$APP_PATH" \
+          echo ""
+          echo "Watch contents:"
+          find "$WATCH_APP" \
             -maxdepth 3 \
-            -type d \
-            \( -name "*.app" -o -name "*.appex" \) \
-            -print 2>/dev/null || true
+            -print | head -200
 
-      # =========================================================
-      # CREATE IPA
-      # =========================================================
+          echo ""
+          echo "Watch executable candidates:"
+          find "$WATCH_APP" \
+            -type f \
+            -maxdepth 2 \
+            -print
 
-      - name: Create IPA
+
+      # ============================================================
+      # 13. INSPECT WATCH MACH-O
+      # ============================================================
+
+      - name: Inspect Watch Mach-O
+        working-directory: edge-main
+        run: |
+          APP_PATH=$(cat runner_app_path.txt)
+
+          WATCH_APP="$APP_PATH/Watch/OpenStrapWatch Watch App.app"
+
+          echo "=========================================="
+          echo "WATCH MACH-O INSPECTION"
+          echo "=========================================="
+
+          echo ""
+          echo "Mach-O files:"
+
+          find "$WATCH_APP" \
+            -type f \
+            -print0 | while IFS= read -r -d '' FILE
+          do
+            if file "$FILE" | grep -q "Mach-O"; then
+              echo ""
+              echo "------------------------------------------"
+              echo "$FILE"
+              file "$FILE" || true
+
+              if command -v lipo >/dev/null 2>&1; then
+                lipo -info "$FILE" 2>&1 || true
+              fi
+
+              codesign -dv "$FILE" 2>&1 | head -20 || true
+            fi
+          done
+
+
+      # ============================================================
+      # 14. AD-HOC SIGN WATCH MACH-O
+      #
+      # This is the important workaround for Sideloadly 0.70.1.
+      #
+      # We are NOT using an Apple Developer certificate here.
+      # "-" means Apple's local ad-hoc signature.
+      #
+      # Sideloadly can later replace this signature with the
+      # user's Apple ID signing.
+      # ============================================================
+
+      - name: Ad-hoc sign Watch content
+        working-directory: edge-main
+        run: |
+          APP_PATH=$(cat runner_app_path.txt)
+
+          WATCH_APP="$APP_PATH/Watch/OpenStrapWatch Watch App.app"
+
+          echo "=========================================="
+          echo "AD-HOC SIGNING WATCH CONTENT"
+          echo "=========================================="
+
+          if [ ! -d "$WATCH_APP" ]; then
+            echo "ERROR: Watch app missing."
+            exit 1
+          fi
+
+          echo ""
+          echo "Signing nested Mach-O files first..."
+
+          find "$WATCH_APP" \
+            -type f \
+            -print0 | while IFS= read -r -d '' FILE
+          do
+
+            if file "$FILE" | grep -q "Mach-O"; then
+
+              echo ""
+              echo "Signing:"
+              echo "$FILE"
+
+              codesign \
+                --force \
+                --sign - \
+                --timestamp=none \
+                "$FILE"
+
+            fi
+
+          done
+
+          echo ""
+          echo "Signing Watch application bundle..."
+
+          codesign \
+            --deep \
+            --force \
+            --sign - \
+            --timestamp=none \
+            "$WATCH_APP"
+
+          echo ""
+          echo "Watch signing completed."
+
+
+      # ============================================================
+      # 15. VERIFY WATCH SIGNATURE
+      # ============================================================
+
+      - name: Verify Watch signature
+        working-directory: edge-main
+        run: |
+          APP_PATH=$(cat runner_app_path.txt)
+
+          WATCH_APP="$APP_PATH/Watch/OpenStrapWatch Watch App.app"
+
+          echo "=========================================="
+          echo "VERIFYING WATCH SIGNATURE"
+          echo "=========================================="
+
+          echo ""
+          echo "codesign verification:"
+
+          codesign \
+            --verify \
+            --deep \
+            --strict \
+            "$WATCH_APP"
+
+          echo ""
+          echo "Watch signature:"
+          codesign \
+            -dv \
+            --verbose=4 \
+            "$WATCH_APP" \
+            2>&1 | head -80 || true
+
+          echo ""
+          echo "Watch verification completed."
+
+
+      # ============================================================
+      # 16. VERIFY WATCH BUNDLE IDS
+      # ============================================================
+
+      - name: Verify Watch bundle identifiers
+        working-directory: edge-main
+        run: |
+          APP_PATH=$(cat runner_app_path.txt)
+
+          WATCH_APP="$APP_PATH/Watch/OpenStrapWatch Watch App.app"
+
+          echo "=========================================="
+          echo "WATCH BUNDLE IDENTIFIERS"
+          echo "=========================================="
+
+          echo ""
+          echo "iPhone Info.plist:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleIdentifier" \
+            "$APP_PATH/Info.plist" \
+            || true
+
+          echo ""
+          echo "Watch Info.plist:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :CFBundleIdentifier" \
+            "$WATCH_APP/Info.plist" \
+            || true
+
+          echo ""
+          echo "Watch companion:"
+          /usr/libexec/PlistBuddy \
+            -c "Print :WKCompanionAppBundleIdentifier" \
+            "$WATCH_APP/Info.plist" \
+            || true
+
+          echo ""
+          echo "Expected:"
+          echo "Watch ID must end in:"
+          echo ".watchkitapp"
+
+          echo ""
+          echo "Companion must equal iPhone bundle ID."
+
+
+      # ============================================================
+      # 17. CREATE IPA
+      # ============================================================
+
+      - name: Create IPA with Watch
         working-directory: edge-main
         run: |
           echo "=========================================="
-          echo "CREATING IPHONE-ONLY IPA"
+          echo "CREATING IPA WITH WATCH"
           echo "=========================================="
 
           APP_PATH=$(cat runner_app_path.txt)
@@ -377,27 +653,37 @@ jobs:
             exit 1
           fi
 
-          echo "Using:"
-          echo "$APP_PATH"
-
           rm -rf Payload
           mkdir -p Payload
 
           cp -R "$APP_PATH" Payload/Runner.app
 
           echo ""
-          echo "Checking IPA payload..."
+          echo "Checking Payload/Runner.app/Watch..."
 
-          find Payload \
-            -maxdepth 4 \
-            -type d \
-            -print | head -100
+          if [ ! -d "Payload/Runner.app/Watch" ]; then
+            echo "ERROR: Watch directory missing from payload."
+            exit 1
+          fi
+
+          if [ ! -d \
+            "Payload/Runner.app/Watch/OpenStrapWatch Watch App.app" ]; then
+            echo "ERROR: OpenStrap Watch app missing from payload."
+            exit 1
+          fi
+
+          echo ""
+          echo "Watch payload confirmed."
 
           echo ""
           echo "Creating IPA..."
 
-          zip -qr -y \
-            openstrap-edge-custom-iphone-only-unsigned.ipa \
+          rm -f openstrap-edge-custom-watch-unsigned.ipa
+
+          zip \
+            -qr \
+            -y \
+            openstrap-edge-custom-watch-unsigned.ipa \
             Payload
 
           echo ""
@@ -405,56 +691,84 @@ jobs:
           echo "IPA CREATED"
           echo "=========================================="
 
-          ls -lh openstrap-edge-custom-iphone-only-unsigned.ipa
+          ls -lh openstrap-edge-custom-watch-unsigned.ipa
 
-      # =========================================================
-      # VERIFY IPA
-      # =========================================================
 
-      - name: Verify IPA
+      # ============================================================
+      # 18. VERIFY IPA
+      # ============================================================
+
+      - name: Verify IPA contains Watch
         working-directory: edge-main
         run: |
-          echo "Verifying IPA..."
+          IPA="openstrap-edge-custom-watch-unsigned.ipa"
 
-          test -f openstrap-edge-custom-iphone-only-unsigned.ipa
+          echo "=========================================="
+          echo "FINAL IPA VERIFICATION"
+          echo "=========================================="
+
+          test -f "$IPA"
 
           echo ""
           echo "IPA:"
-          ls -lh openstrap-edge-custom-iphone-only-unsigned.ipa
+          ls -lh "$IPA"
 
           echo ""
-          echo "IPA contents:"
+          echo "Watch entries:"
 
-          unzip -l \
-            openstrap-edge-custom-iphone-only-unsigned.ipa \
-            | head -80
+          unzip -l "$IPA" \
+            | grep -i \
+              "OpenStrapWatch" \
+            | head -100
 
           echo ""
-          echo "Checking that Watch app is absent..."
+          echo "Checking Watch app..."
 
-          if unzip -l \
-            openstrap-edge-custom-iphone-only-unsigned.ipa \
-            | grep -qi "Watch/OpenStrapWatch"; then
+          if unzip -l "$IPA" \
+            | grep -q \
+              "Payload/Runner.app/Watch/OpenStrapWatch Watch App.app/"; then
 
-            echo "ERROR: Watch app is still present."
-            exit 1
+            echo ""
+            echo "SUCCESS:"
+            echo "Watch app IS INSIDE IPA."
 
           else
 
-            echo "SUCCESS: Watch companion is NOT inside IPA."
+            echo ""
+            echo "ERROR:"
+            echo "Watch app is NOT inside IPA."
+            exit 1
 
           fi
 
           echo ""
-          echo "IPA verification completed."
+          echo "Checking that Watch was not accidentally removed..."
 
-      # =========================================================
-      # UPLOAD IPA
-      # =========================================================
+          if unzip -l "$IPA" \
+            | grep -qi "Payload/Runner.app/Watch/"; then
 
-      - name: Upload IPA
+            echo "SUCCESS: Watch directory exists."
+
+          else
+
+            echo "ERROR: Watch directory missing."
+            exit 1
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "WATCH IPA READY"
+          echo "=========================================="
+
+
+      # ============================================================
+      # 19. UPLOAD IPA
+      # ============================================================
+
+      - name: Upload Watch IPA
         uses: actions/upload-artifact@v4
         with:
-          name: openstrap-edge-custom-iphone-only-unsigned-ipa
-          path: edge-main/openstrap-edge-custom-iphone-only-unsigned.ipa
+          name: openstrap-edge-custom-watch-unsigned-ipa
+          path: edge-main/openstrap-edge-custom-watch-unsigned.ipa
           if-no-files-found: error
