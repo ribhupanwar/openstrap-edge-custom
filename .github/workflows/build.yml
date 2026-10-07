@@ -30,10 +30,7 @@ jobs:
           unzip -q openstrap-edge-whoop-custom.zip
 
           echo "Project extracted."
-          echo "Root contents:"
           ls -la
-
-          echo "Project contents:"
           ls -la edge-main
 
       # =========================================================
@@ -53,17 +50,12 @@ jobs:
       - name: Install dependencies
         working-directory: edge-main
         run: |
-          echo "Preparing environment..."
-
           echo "COMPANION_URL=" > .env
           echo "BACKEND_URL=" >> .env
           echo "ENABLE_HEALTH_DATA_CONTRIBUTION=true" >> .env
 
           flutter --version
-
           flutter pub get
-
-          echo "Flutter dependencies installed."
 
       # =========================================================
       # XCODE CHECK
@@ -71,10 +63,7 @@ jobs:
 
       - name: Check Xcode
         run: |
-          echo "Xcode version:"
           xcodebuild -version
-
-          echo "Developer directory:"
           xcode-select -p
 
       # =========================================================
@@ -109,16 +98,13 @@ jobs:
 
           if old in s:
               s = s.replace(old, new)
-              print("FIX 1: applied")
+              print("FIX 1 applied")
           else:
-              print("FIX 1: already applied / not found")
+              print("FIX 1 already applied / not found")
 
           # -----------------------------------------------------
           # FIX 2
           # AlarmScreen does not exist in current source.
-          #
-          # Disable only the broken navigation callback so the
-          # application can compile.
           # -----------------------------------------------------
 
           old = "onTap: () => go(c, const AlarmScreen()),"
@@ -128,7 +114,7 @@ jobs:
                   old,
                   "onTap: () {},"
               )
-              print("FIX 2: applied")
+              print("FIX 2 applied")
 
           old = "onTap: () => go(c, AlarmScreen()),"
 
@@ -137,11 +123,11 @@ jobs:
                   old,
                   "onTap: () {},"
               )
-              print("FIX 2b: applied")
+              print("FIX 2b applied")
 
           # -----------------------------------------------------
           # FIX 3
-          # AlarmArmState.smart does not exist in current enum.
+          # AlarmArmState.smart does not exist
           # -----------------------------------------------------
 
           old = "alarmState == AlarmArmState.smart"
@@ -151,14 +137,13 @@ jobs:
                   old,
                   "alarmState != null"
               )
-              print("FIX 3: applied")
+              print("FIX 3 applied")
           else:
-              print("FIX 3: already applied / not found")
+              print("FIX 3 already applied / not found")
 
           p.write_text(s)
 
-          print("")
-          print("Dart patch completed successfully.")
+          print("Dart patch completed.")
           PY
 
       # =========================================================
@@ -206,13 +191,6 @@ jobs:
 
               print("project.pbxproj patched.")
 
-          else:
-              print("WARNING: project.pbxproj not found.")
-
-          # -----------------------------------------------------
-          # Signing defaults
-          # -----------------------------------------------------
-
           signing = Path("ios/Config/Signing.defaults.xcconfig")
 
           if signing.exists():
@@ -229,22 +207,16 @@ jobs:
 
               print("Signing.defaults.xcconfig patched.")
 
-          else:
-              print("Signing.defaults.xcconfig not found.")
-
-          print("")
           print("Unsigned iOS build configuration ready.")
           PY
 
       # =========================================================
-      # FLUTTER IOS CONFIGURATION
+      # PREPARE FLUTTER IOS
       # =========================================================
 
       - name: Prepare Flutter iOS
         working-directory: edge-main
         run: |
-          echo "Preparing Flutter iOS project..."
-
           flutter build ios \
             --release \
             --no-codesign \
@@ -276,34 +248,18 @@ jobs:
           echo "Xcode build completed."
 
       # =========================================================
-      # FIND GENERATED APP
+      # FIND RUNNER.APP
       # =========================================================
 
       - name: Find generated iOS app
         working-directory: edge-main
         run: |
-          echo "=========================================="
-          echo "SEARCHING FOR RUNNER.APP"
-          echo "=========================================="
-
-          echo ""
-          echo "Searching inside build directory..."
+          echo "Searching for Runner.app..."
 
           find build \
             -type d \
             -name "Runner.app" \
             -print 2>/dev/null || true
-
-          echo ""
-          echo "Searching entire project..."
-
-          find . \
-            -type d \
-            -name "Runner.app" \
-            -print 2>/dev/null || true
-
-          echo ""
-          echo "Selecting first Runner.app..."
 
           APP_PATH=$(find build \
             -type d \
@@ -313,14 +269,9 @@ jobs:
 
           if [ -z "$APP_PATH" ]; then
 
-            echo ""
-            echo "=========================================="
-            echo "ERROR: RUNNER.APP NOT FOUND"
-            echo "=========================================="
+            echo "ERROR: Runner.app was not generated."
 
-            echo ""
-            echo "Build directory structure:"
-
+            echo "Build directory:"
             find build \
               -maxdepth 6 \
               -type d \
@@ -329,7 +280,6 @@ jobs:
             exit 1
           fi
 
-          echo ""
           echo "=========================================="
           echo "RUNNER.APP FOUND"
           echo "=========================================="
@@ -338,9 +288,76 @@ jobs:
 
           echo "$APP_PATH" > runner_app_path.txt
 
-          echo ""
-          echo "App size:"
           du -sh "$APP_PATH"
+
+      # =========================================================
+      # REMOVE WATCH COMPANION FROM GENERATED IPA
+      # =========================================================
+
+      - name: Remove Watch companion
+        working-directory: edge-main
+        run: |
+          APP_PATH=$(cat runner_app_path.txt)
+
+          echo "=========================================="
+          echo "CHECKING WATCH COMPANION"
+          echo "=========================================="
+
+          echo "Application:"
+          echo "$APP_PATH"
+
+          if [ -d "$APP_PATH/Watch" ]; then
+
+            echo ""
+            echo "Watch directory found:"
+            find "$APP_PATH/Watch" \
+              -maxdepth 3 \
+              -print || true
+
+            echo ""
+            echo "Removing embedded Watch application..."
+
+            rm -rf "$APP_PATH/Watch"
+
+            echo ""
+            echo "Watch companion removed."
+
+          else
+
+            echo ""
+            echo "No Watch directory found."
+
+          fi
+
+          # -----------------------------------------------------
+          # Also check for WatchKit/Watch extension locations
+          # -----------------------------------------------------
+
+          if [ -d "$APP_PATH/PlugIns" ]; then
+
+            echo ""
+            echo "Checking PlugIns..."
+
+            find "$APP_PATH/PlugIns" \
+              -maxdepth 3 \
+              -print || true
+
+            # Remove WatchKit extensions if present
+            find "$APP_PATH/PlugIns" \
+              -type d \
+              \( -name "*.appex" -o -name "*Watch*" \) \
+              -print 2>/dev/null || true
+
+          fi
+
+          echo ""
+          echo "Final embedded bundles:"
+
+          find "$APP_PATH" \
+            -maxdepth 3 \
+            -type d \
+            \( -name "*.app" -o -name "*.appex" \) \
+            -print 2>/dev/null || true
 
       # =========================================================
       # CREATE IPA
@@ -350,39 +367,45 @@ jobs:
         working-directory: edge-main
         run: |
           echo "=========================================="
-          echo "CREATING UNSIGNED IPA"
+          echo "CREATING IPHONE-ONLY IPA"
           echo "=========================================="
 
           APP_PATH=$(cat runner_app_path.txt)
 
-          echo ""
-          echo "Using application:"
-          echo "$APP_PATH"
-
           if [ ! -d "$APP_PATH" ]; then
-            echo "ERROR: Application path does not exist."
+            echo "ERROR: Runner.app does not exist."
             exit 1
           fi
 
-          rm -rf Payload
+          echo "Using:"
+          echo "$APP_PATH"
 
+          rm -rf Payload
           mkdir -p Payload
 
           cp -R "$APP_PATH" Payload/Runner.app
 
           echo ""
-          echo "Creating IPA archive..."
+          echo "Checking IPA payload..."
+
+          find Payload \
+            -maxdepth 4 \
+            -type d \
+            -print | head -100
+
+          echo ""
+          echo "Creating IPA..."
 
           zip -qr -y \
-            openstrap-edge-custom-unsigned.ipa \
+            openstrap-edge-custom-iphone-only-unsigned.ipa \
             Payload
 
           echo ""
           echo "=========================================="
-          echo "IPA CREATED SUCCESSFULLY"
+          echo "IPA CREATED"
           echo "=========================================="
 
-          ls -lh openstrap-edge-custom-unsigned.ipa
+          ls -lh openstrap-edge-custom-iphone-only-unsigned.ipa
 
       # =========================================================
       # VERIFY IPA
@@ -393,27 +416,45 @@ jobs:
         run: |
           echo "Verifying IPA..."
 
-          test -f openstrap-edge-custom-unsigned.ipa
+          test -f openstrap-edge-custom-iphone-only-unsigned.ipa
 
           echo ""
-          echo "IPA file:"
-          ls -lh openstrap-edge-custom-unsigned.ipa
+          echo "IPA:"
+          ls -lh openstrap-edge-custom-iphone-only-unsigned.ipa
 
           echo ""
           echo "IPA contents:"
 
-          unzip -l openstrap-edge-custom-unsigned.ipa | head -30
+          unzip -l \
+            openstrap-edge-custom-iphone-only-unsigned.ipa \
+            | head -80
+
+          echo ""
+          echo "Checking that Watch app is absent..."
+
+          if unzip -l \
+            openstrap-edge-custom-iphone-only-unsigned.ipa \
+            | grep -qi "Watch/OpenStrapWatch"; then
+
+            echo "ERROR: Watch app is still present."
+            exit 1
+
+          else
+
+            echo "SUCCESS: Watch companion is NOT inside IPA."
+
+          fi
 
           echo ""
           echo "IPA verification completed."
 
       # =========================================================
-      # UPLOAD ARTIFACT
+      # UPLOAD IPA
       # =========================================================
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: openstrap-edge-custom-unsigned-ipa
-          path: edge-main/openstrap-edge-custom-unsigned.ipa
+          name: openstrap-edge-custom-iphone-only-unsigned-ipa
+          path: edge-main/openstrap-edge-custom-iphone-only-unsigned.ipa
           if-no-files-found: error
