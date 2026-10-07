@@ -90,14 +90,30 @@ jobs:
           print("Signing configuration modified.")
           PY
 
-      - name: Build iOS
+         - name: Prepare Flutter iOS
         working-directory: edge-main
         run: |
           flutter build ios \
             --release \
             --no-codesign \
+            --config-only \
             --dart-define-from-file=.env
 
+      - name: Build iOS without signing
+        working-directory: edge-main
+        run: |
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            build
       - name: Verify app
         working-directory: edge-main
         run: |
