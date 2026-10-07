@@ -11,6 +11,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -38,6 +39,71 @@ jobs:
           xcodebuild -version
           xcode-select -p
 
+      - name: Fix WHOOP UI Dart compile errors
+        working-directory: edge-main
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("lib/ui2/screens/home_screen.dart")
+          s = p.read_text()
+
+          # ---------------------------------------------------------
+          # FIX 1:
+          # alarmArmOfContext() returns a nullable tuple.
+          # Safely extract its values.
+          # ---------------------------------------------------------
+
+          old = """final (armedAt, alarmState) = alarmArmOfContext(c);"""
+
+          new = """final alarmContext = alarmArmOfContext(c);
+          final armedAt = alarmContext?.$1;
+          final alarmState = alarmContext?.$2;"""
+
+          if old in s:
+              s = s.replace(old, new)
+              print("FIX 1 applied")
+          else:
+              print("FIX 1 pattern not found - continuing")
+
+          # ---------------------------------------------------------
+          # FIX 2:
+          # AlarmScreen is not a const constructor.
+          # ---------------------------------------------------------
+
+          old = "onTap: () => go(c, const AlarmScreen()),"
+          new = "onTap: () => go(c, AlarmScreen()),"
+
+          if old in s:
+              s = s.replace(old, new)
+              print("FIX 2 applied")
+          else:
+              print("FIX 2 pattern not found - continuing")
+
+          # ---------------------------------------------------------
+          # FIX 3:
+          # AlarmArmState.smart does not exist in the current enum.
+          # Replace the direct smart-state comparison with a
+          # null-safe alarm check.
+          # ---------------------------------------------------------
+
+          old = "alarmState == AlarmArmState.smart"
+
+          if old in s:
+              s = s.replace(
+                  old,
+                  "alarmState != null"
+              )
+              print("FIX 3 applied")
+          else:
+              print("FIX 3 pattern not found - continuing")
+
+          p.write_text(s)
+
+          print("")
+          print("WHOOP UI Dart compile patch completed.")
+          PY
+
       - name: Disable iOS signing
         working-directory: edge-main
         run: |
@@ -45,44 +111,59 @@ jobs:
           from pathlib import Path
 
           p = Path("ios/Runner.xcodeproj/project.pbxproj")
-          s = p.read_text()
 
-          s = s.replace(
-              'CODE_SIGN_STYLE = Automatic;',
-              'CODE_SIGN_STYLE = Manual;'
-          )
+          if p.exists():
+              s = p.read_text()
 
-          s = s.replace(
-              'CODE_SIGNING_ALLOWED = YES;',
-              'CODE_SIGNING_ALLOWED = NO;'
-          )
+              s = s.replace(
+                  'CODE_SIGN_STYLE = Automatic;',
+                  'CODE_SIGN_STYLE = Manual;'
+              )
 
-          s = s.replace(
-              'CODE_SIGNING_REQUIRED = YES;',
-              'CODE_SIGNING_REQUIRED = NO;'
-          )
+              s = s.replace(
+                  'CODE_SIGNING_ALLOWED = YES;',
+                  'CODE_SIGNING_ALLOWED = NO;'
+              )
 
-          s = s.replace(
-              'DEVELOPMENT_TEAM = "$(APPLE_DEVELOPMENT_TEAM)";',
-              'DEVELOPMENT_TEAM = "";'
-          )
+              s = s.replace(
+                  'CODE_SIGNING_REQUIRED = YES;',
+                  'CODE_SIGNING_REQUIRED = NO;'
+              )
 
-          s = s.replace(
-              'CODE_SIGN_IDENTITY = "Apple Development";',
-              'CODE_SIGN_IDENTITY = "";'
-          )
+              s = s.replace(
+                  'DEVELOPMENT_TEAM = "$(APPLE_DEVELOPMENT_TEAM)";',
+                  'DEVELOPMENT_TEAM = "";'
+              )
 
-          p.write_text(s)
+              s = s.replace(
+                  'CODE_SIGN_IDENTITY = "Apple Development";',
+                  'CODE_SIGN_IDENTITY = "";'
+              )
+
+              p.write_text(s)
+
+              print("project.pbxproj signing configuration modified.")
+          else:
+              print("project.pbxproj not found.")
 
           signing = Path("ios/Config/Signing.defaults.xcconfig")
 
           if signing.exists():
               ss = signing.read_text()
-              ss += "\nCODE_SIGNING_ALLOWED = NO\n"
-              ss += "CODE_SIGNING_REQUIRED = NO\n"
+
+              if "CODE_SIGNING_ALLOWED = NO" not in ss:
+                  ss += "\nCODE_SIGNING_ALLOWED = NO\n"
+
+              if "CODE_SIGNING_REQUIRED = NO" not in ss:
+                  ss += "CODE_SIGNING_REQUIRED = NO\n"
+
               signing.write_text(ss)
 
-          print("Signing configuration modified.")
+              print("Signing.defaults.xcconfig modified.")
+          else:
+              print("Signing.defaults.xcconfig not found.")
+
+          print("iOS signing disabled for unsigned build.")
           PY
 
       - name: Prepare Flutter iOS
@@ -113,19 +194,32 @@ jobs:
       - name: Verify app
         working-directory: edge-main
         run: |
+          echo "Checking generated iOS application..."
           ls -lah build/ios/iphoneos/
+
           test -d build/ios/iphoneos/Runner.app
+
+          echo "======================================"
           echo "RUNNER.APP FOUND"
+          echo "======================================"
 
       - name: Create IPA
         working-directory: edge-main
         run: |
+          echo "Creating unsigned IPA..."
+
           rm -rf Payload
           mkdir -p Payload
 
           cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
 
-          zip -qr -y openstrap-edge-custom-unsigned.ipa Payload
+          zip -qr -y \
+            openstrap-edge-custom-unsigned.ipa \
+            Payload
+
+          echo "======================================"
+          echo "IPA CREATED"
+          echo "======================================"
 
           ls -lh openstrap-edge-custom-unsigned.ipa
 
