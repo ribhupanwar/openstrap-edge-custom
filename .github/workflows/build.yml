@@ -12,37 +12,74 @@ jobs:
 
     steps:
 
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
+
       - name: Checkout
         uses: actions/checkout@v4
 
+      # =========================================================
+      # EXTRACT PROJECT
+      # =========================================================
+
       - name: Extract project
         run: |
+          echo "Extracting OpenStrap Edge project..."
+
           unzip -q openstrap-edge-whoop-custom.zip
-          echo "Project extracted"
+
+          echo "Project extracted."
+          echo "Root contents:"
           ls -la
+
+          echo "Project contents:"
+          ls -la edge-main
+
+      # =========================================================
+      # FLUTTER
+      # =========================================================
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.6'
+          channel: stable
+
+      # =========================================================
+      # DEPENDENCIES
+      # =========================================================
 
       - name: Install dependencies
         working-directory: edge-main
         run: |
+          echo "Preparing environment..."
+
           echo "COMPANION_URL=" > .env
           echo "BACKEND_URL=" >> .env
           echo "ENABLE_HEALTH_DATA_CONTRIBUTION=true" >> .env
 
+          flutter --version
+
           flutter pub get
+
+          echo "Flutter dependencies installed."
+
+      # =========================================================
+      # XCODE CHECK
+      # =========================================================
 
       - name: Check Xcode
         run: |
+          echo "Xcode version:"
           xcodebuild -version
+
+          echo "Developer directory:"
           xcode-select -p
 
-      # ---------------------------------------------------------
-      # FIX CURRENT WHOOP UI / ALARM COMPILE ERRORS
-      # ---------------------------------------------------------
+      # =========================================================
+      # FIX DART COMPILE ERRORS
+      # =========================================================
 
       - name: Fix Dart compile errors
         working-directory: edge-main
@@ -53,16 +90,16 @@ jobs:
           p = Path("lib/ui2/screens/home_screen.dart")
 
           if not p.exists():
-              raise SystemExit("home_screen.dart not found")
+              raise SystemExit("ERROR: home_screen.dart not found")
 
           s = p.read_text()
 
           print("Patching home_screen.dart...")
 
-          # ---------------------------------------------------
+          # -----------------------------------------------------
           # FIX 1
           # Nullable tuple destructuring
-          # ---------------------------------------------------
+          # -----------------------------------------------------
 
           old = "final (armedAt, alarmState) = alarmArmOfContext(c);"
 
@@ -72,18 +109,17 @@ jobs:
 
           if old in s:
               s = s.replace(old, new)
-              print("FIX 1 applied")
+              print("FIX 1: applied")
           else:
-              print("FIX 1 already applied / not required")
+              print("FIX 1: already applied / not found")
 
-          # ---------------------------------------------------
+          # -----------------------------------------------------
           # FIX 2
-          # AlarmScreen is not available in this screen.
+          # AlarmScreen does not exist in current source.
           #
-          # Remove the broken navigation target.
-          # The alarm card remains visible but does not call
-          # a non-existent Dart class.
-          # ---------------------------------------------------
+          # Disable only the broken navigation callback so the
+          # application can compile.
+          # -----------------------------------------------------
 
           old = "onTap: () => go(c, const AlarmScreen()),"
 
@@ -92,7 +128,7 @@ jobs:
                   old,
                   "onTap: () {},"
               )
-              print("FIX 2 applied")
+              print("FIX 2: applied")
 
           old = "onTap: () => go(c, AlarmScreen()),"
 
@@ -101,12 +137,12 @@ jobs:
                   old,
                   "onTap: () {},"
               )
-              print("FIX 2b applied")
+              print("FIX 2b: applied")
 
-          # ---------------------------------------------------
+          # -----------------------------------------------------
           # FIX 3
-          # AlarmArmState.smart does not exist.
-          # ---------------------------------------------------
+          # AlarmArmState.smart does not exist in current enum.
+          # -----------------------------------------------------
 
           old = "alarmState == AlarmArmState.smart"
 
@@ -115,16 +151,19 @@ jobs:
                   old,
                   "alarmState != null"
               )
-              print("FIX 3 applied")
+              print("FIX 3: applied")
+          else:
+              print("FIX 3: already applied / not found")
 
           p.write_text(s)
 
-          print("Dart compile patch completed.")
+          print("")
+          print("Dart patch completed successfully.")
           PY
 
-      # ---------------------------------------------------------
-      # DISABLE APPLE SIGNING
-      # ---------------------------------------------------------
+      # =========================================================
+      # DISABLE IOS SIGNING
+      # =========================================================
 
       - name: Disable iOS signing
         working-directory: edge-main
@@ -135,6 +174,7 @@ jobs:
           p = Path("ios/Runner.xcodeproj/project.pbxproj")
 
           if p.exists():
+
               s = p.read_text()
 
               s = s.replace(
@@ -164,11 +204,19 @@ jobs:
 
               p.write_text(s)
 
-              print("project.pbxproj patched")
+              print("project.pbxproj patched.")
+
+          else:
+              print("WARNING: project.pbxproj not found.")
+
+          # -----------------------------------------------------
+          # Signing defaults
+          # -----------------------------------------------------
 
           signing = Path("ios/Config/Signing.defaults.xcconfig")
 
           if signing.exists():
+
               ss = signing.read_text()
 
               if "CODE_SIGNING_ALLOWED = NO" not in ss:
@@ -179,31 +227,39 @@ jobs:
 
               signing.write_text(ss)
 
-              print("Signing.defaults.xcconfig patched")
+              print("Signing.defaults.xcconfig patched.")
 
-          print("Unsigned build configuration ready.")
+          else:
+              print("Signing.defaults.xcconfig not found.")
+
+          print("")
+          print("Unsigned iOS build configuration ready.")
           PY
 
-      # ---------------------------------------------------------
-      # GENERATE FLUTTER IOS CONFIGURATION
-      # ---------------------------------------------------------
+      # =========================================================
+      # FLUTTER IOS CONFIGURATION
+      # =========================================================
 
       - name: Prepare Flutter iOS
         working-directory: edge-main
         run: |
+          echo "Preparing Flutter iOS project..."
+
           flutter build ios \
             --release \
             --no-codesign \
             --config-only \
             --dart-define-from-file=.env
 
-      # ---------------------------------------------------------
+      # =========================================================
       # BUILD IOS
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Build iOS without signing
         working-directory: edge-main
         run: |
+          echo "Starting Xcode build..."
+
           xcodebuild \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
@@ -217,53 +273,147 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             build
 
-      # ---------------------------------------------------------
-      # VERIFY
-      # ---------------------------------------------------------
+          echo "Xcode build completed."
 
-      - name: Verify app
+      # =========================================================
+      # FIND GENERATED APP
+      # =========================================================
+
+      - name: Find generated iOS app
         working-directory: edge-main
         run: |
-          echo "Checking generated application..."
+          echo "=========================================="
+          echo "SEARCHING FOR RUNNER.APP"
+          echo "=========================================="
 
-          ls -lah build/ios/iphoneos/
+          echo ""
+          echo "Searching inside build directory..."
 
-          test -d build/ios/iphoneos/Runner.app
+          find build \
+            -type d \
+            -name "Runner.app" \
+            -print 2>/dev/null || true
 
-          echo "======================================"
+          echo ""
+          echo "Searching entire project..."
+
+          find . \
+            -type d \
+            -name "Runner.app" \
+            -print 2>/dev/null || true
+
+          echo ""
+          echo "Selecting first Runner.app..."
+
+          APP_PATH=$(find build \
+            -type d \
+            -name "Runner.app" \
+            -print \
+            -quit 2>/dev/null || true)
+
+          if [ -z "$APP_PATH" ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "ERROR: RUNNER.APP NOT FOUND"
+            echo "=========================================="
+
+            echo ""
+            echo "Build directory structure:"
+
+            find build \
+              -maxdepth 6 \
+              -type d \
+              -print 2>/dev/null | head -300 || true
+
+            exit 1
+          fi
+
+          echo ""
+          echo "=========================================="
           echo "RUNNER.APP FOUND"
-          echo "======================================"
+          echo "=========================================="
 
-      # ---------------------------------------------------------
-      # CREATE UNSIGNED IPA
-      # ---------------------------------------------------------
+          echo "$APP_PATH"
+
+          echo "$APP_PATH" > runner_app_path.txt
+
+          echo ""
+          echo "App size:"
+          du -sh "$APP_PATH"
+
+      # =========================================================
+      # CREATE IPA
+      # =========================================================
 
       - name: Create IPA
         working-directory: edge-main
         run: |
-          echo "Creating unsigned IPA..."
+          echo "=========================================="
+          echo "CREATING UNSIGNED IPA"
+          echo "=========================================="
+
+          APP_PATH=$(cat runner_app_path.txt)
+
+          echo ""
+          echo "Using application:"
+          echo "$APP_PATH"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: Application path does not exist."
+            exit 1
+          fi
 
           rm -rf Payload
+
           mkdir -p Payload
 
-          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
+          cp -R "$APP_PATH" Payload/Runner.app
+
+          echo ""
+          echo "Creating IPA archive..."
 
           zip -qr -y \
             openstrap-edge-custom-unsigned.ipa \
             Payload
 
-          echo "======================================"
-          echo "IPA CREATED"
-          echo "======================================"
+          echo ""
+          echo "=========================================="
+          echo "IPA CREATED SUCCESSFULLY"
+          echo "=========================================="
 
           ls -lh openstrap-edge-custom-unsigned.ipa
 
-      # ---------------------------------------------------------
-      # UPLOAD IPA
-      # ---------------------------------------------------------
+      # =========================================================
+      # VERIFY IPA
+      # =========================================================
+
+      - name: Verify IPA
+        working-directory: edge-main
+        run: |
+          echo "Verifying IPA..."
+
+          test -f openstrap-edge-custom-unsigned.ipa
+
+          echo ""
+          echo "IPA file:"
+          ls -lh openstrap-edge-custom-unsigned.ipa
+
+          echo ""
+          echo "IPA contents:"
+
+          unzip -l openstrap-edge-custom-unsigned.ipa | head -30
+
+          echo ""
+          echo "IPA verification completed."
+
+      # =========================================================
+      # UPLOAD ARTIFACT
+      # =========================================================
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: openstrap-edge-custom-unsigned-ipa
           path: edge-main/openstrap-edge-custom-unsigned.ipa
+          if-no-files-found: error
