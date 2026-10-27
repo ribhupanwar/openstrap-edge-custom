@@ -1,0 +1,22 @@
+name: Temporary Edge source inspection
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload Edge source archive for local protocol audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-source-inspection
+          path: openstrap-edge-whoop-custom.zip
+          if-no-files-found: error
+          retention-days: 1
